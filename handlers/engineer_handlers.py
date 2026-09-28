@@ -118,7 +118,7 @@ async def reject_cancel(message: Message, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data.regexp(r"^retake:\d+$"))
-async def retake_ticket(callback: CallbackQuery, bot: Bot) -> None:
+async def retake_ticket(callback: CallbackQuery) -> None:
     """Смена ответственного: «🔄 Взять на себя» — заявка остаётся в работе."""
     ticket_id = int(callback.data.split(":", 1)[1])
     t = await get_ticket(ticket_id)
@@ -140,13 +140,7 @@ async def retake_ticket(callback: CallbackQuery, bot: Bot) -> None:
         )
     except TelegramBadRequest as e:
         log.warning("Не удалось отредактировать карточку #%s: %s", ticket_id, e)
-    ok = await notify_user(
-        bot, t["telegram_id"], f"🔄 По вашей заявке <b>#{ticket_id}</b> назначен новый ответственный. Ожидайте выполнения."
-    )
-    if not ok:
-        await callback.message.reply(
-            f"⚠️ Не удалось уведомить пользователя по заявке #{ticket_id} (бот заблокирован)."
-        )
+    # Пользователю о смене ответственного не пишем — только обновляем карточку в чате
     await callback.answer("Вы — ответственный ✅")
 
 

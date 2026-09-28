@@ -1164,7 +1164,15 @@ async def user_thread_reply(message: Message, bot: Bot) -> None:
     if not t:
         return
     text = (message.text or message.caption or "").strip()
-    who = f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name
+    u = await get_user(message.from_user.id)
+    fio = ((u or {}).get("fio") or "").strip()
+    clinic = ((u or {}).get("clinic_short") or "").strip()
+    if fio:
+        who = f"{fio} ({clinic})" if clinic else fio
+    elif message.from_user.username:
+        who = f"@{message.from_user.username}"
+    else:
+        who = message.from_user.full_name
     card_id = t.get("engineer_msg_id") or 0
     kwargs = {"reply_to_message_id": card_id} if card_id else {}
     try:

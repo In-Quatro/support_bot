@@ -3,10 +3,22 @@ services:
     build: .
     container_name: support_bot
     restart: unless-stopped
+    # .env лежит рядом с этим файлом. Источник секретов один — менять только его.
     env_file:
       - .env
+    environment:
+      # Явное пробрасывание переменных из .env (значения ${...} берутся из .env).
+      # DB_PATH/PHOTOS_DIR по умолчанию указывают внутрь volume /app/data,
+      # поэтому базу и фото не теряем при пересборке. MAX_PHOTOS — лимит фото в заявке.
+      BOT_TOKEN: ${BOT_TOKEN:?BOT_TOKEN must be set in .env}
+      GROUP_CHAT_ID: ${GROUP_CHAT_ID:?GROUP_CHAT_ID must be set in .env}
+      ADMIN_IDS: ${ADMIN_IDS:-}
+      DB_PATH: ${DB_PATH:-/app/data/bot_database.db}
+      PHOTOS_DIR: ${PHOTOS_DIR:-/app/data/photos}
+      MAX_PHOTOS: ${MAX_PHOTOS:-3}
     volumes:
-      # Персистентность: БД и фото переживают перезапуск/пересборку
+      # Персистентность: БД и фото живут на хосте в ./data и переживают
+      # перезапуск/пересборку/удаление контейнера.
       - ./data:/app/data
     logging:
       driver: json-file
