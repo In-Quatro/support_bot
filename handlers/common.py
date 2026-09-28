@@ -36,7 +36,7 @@ def fmt_date(iso: str | None) -> str:
         return (iso or "")[:10]
 
 
-def ticket_card(t: dict, header: str = "") -> str:
+def ticket_card(t: dict, header: str = "", show_responsible: bool = True) -> str:
     """Структурированный текст заявки для чата специалистов / пользователя."""
     status = STATUS_LABELS.get(t.get("status", "new"), t.get("status", ""))
     ttype = TYPE_LABELS.get(t.get("type", "support"), t.get("type", ""))
@@ -77,7 +77,7 @@ def ticket_card(t: dict, header: str = "") -> str:
                 f"🔢 Количество: {t.get('quantity') or '—'}",
             ]
         lines.append(f"💬 Комментарий: {t.get('description') or '—'}")
-    if t.get("engineer_username"):
+    if show_responsible and t.get("engineer_username"):
         lines.append(f"👷 Ответственный: @{t['engineer_username']}")
     if t.get("status") == "rejected" and t.get("reject_reason"):
         lines.append(f"⛔ Причина отклонения: {t['reject_reason']}")

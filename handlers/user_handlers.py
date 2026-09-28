@@ -1066,9 +1066,11 @@ async def my_ticket_detail(callback: CallbackQuery) -> None:
         await callback.answer("Заявка не найдена", show_alert=True)
         return
     if t["status"] in ("done", "rejected"):
-        await callback.message.answer(ticket_card(t), reply_markup=reopen_kb(ticket_id))
+        await callback.message.answer(
+            ticket_card(t, show_responsible=False), reply_markup=reopen_kb(ticket_id)
+        )
     else:
-        await callback.message.answer(ticket_card(t))
+        await callback.message.answer(ticket_card(t, show_responsible=False))
     await callback.answer()
 
 
