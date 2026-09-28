@@ -1,0 +1,15 @@
+services:
+  bot:
+    build: .
+    container_name: support_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Персистентность: БД и фото переживают перезапуск/пересборку
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
