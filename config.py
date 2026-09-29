@@ -25,11 +25,5 @@ class Settings(BaseSettings):
     # Сколько фото максимум можно прикрепить к заявке в ТП
     MAX_PHOTOS: int = 3
 
-    # Веб-админка (запускается вместе с ботом, если WEB_ENABLED и задан WEB_PASSWORD)
-    WEB_ENABLED: bool = False
-    WEB_HOST: str = "127.0.0.1"
-    WEB_PORT: int = 8080
-    WEB_PASSWORD: str = ""
-
 
 settings = Settings()

@@ -35,27 +35,10 @@ async def main() -> None:
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_routers(admin_handlers.router, user_handlers.router, engineer_handlers.router)
 
-    # Веб-админка (опционально, включается через WEB_ENABLED + WEB_PASSWORD)
-    web_runner = None
-    if settings.WEB_ENABLED:
-        if not settings.WEB_PASSWORD:
-            log.warning("WEB_ENABLED=true, но WEB_PASSWORD пуст — веб-админка не запущена")
-        else:
-            from aiohttp.web import AppRunner, TCPSite
-
-            from webadmin import create_app
-
-            web_runner = AppRunner(create_app(bot))
-            await web_runner.setup()
-            await TCPSite(web_runner, settings.WEB_HOST, settings.WEB_PORT).start()
-            log.info("Веб-админка: http://%s:%s", settings.WEB_HOST, settings.WEB_PORT)
-
     log.info("Бот запущен. Чат специалистов: %s", settings.GROUP_CHAT_ID)
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
-        if web_runner is not None:
-            await web_runner.cleanup()
         await close_db()
 
 

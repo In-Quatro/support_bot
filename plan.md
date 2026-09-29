@@ -67,11 +67,7 @@
 #### 3. Админ-панель (ЛС, доступ по Telegram ID из `ADMIN_IDS`)
 - Команда `/admin`: весь список пользователей в формате «Номер поликлиники — ФИО» (по 20 на странице, пагинация), 🔍 поиск по ФИО/телефону/поликлинике/адресу/должности/username/ID.
 - Карточка пользователя: все данные + статус доступа; правка ФИО/адреса/поликлиники; просмотр всех обращений пользователя с деталями; кнопка «📨 Дублировать в чат» на заявке (бот заново отправляет карточку + фото в чат специалистов с пометкой «Дубликат»); одобрение/отклонение ожидающих (с причиной), закрытие/открытие доступа (пользователь уведомляется).
-
-#### 4. Веб-админка (дополнение к /admin, без новых зависимостей — на aiohttp)
-- Запускается вместе с ботом, если в `.env` заданы `WEB_ENABLED=true` и `WEB_PASSWORD` (`WEB_HOST`/`WEB_PORT`, по умолчанию `127.0.0.1:8080`).
-- Вход по паролю, сессия в HttpOnly-cookie. В compose порт публикуется только на localhost хоста.
-- Разделы: 👥 Пользователи (весь список, поиск, пагинация; карточка + правка всех полей + одобрение/отклонение/блок с уведомлениями) и 🧾 Заявки (фильтр по статусу, поиск; карточка; смена статуса В работу/Выполнено/Отклонено с уведомлением пользователя и обновлением карточки в чате; дублирование в чат).
+- Вся навигация — в одном сообщении: переходы по кнопкам правят его, а не шлют новые; промежуточные запросы и ввод пользователя удаляются после обработки.
 
 ---
 
@@ -83,7 +79,7 @@
    - `tickets(id, user_id, telegram_id, type['support'|'cartridge'], clinic_num, address, tech_point, cabinet, ip_address, printer_model, quantity, description, photos_json[file_id...], status['new'|'in_progress'|'done'|'rejected'], reject_reason, engineer_username, engineer_msg_id, author_name, author_phone, reopen_comment, scope['point'|'clinic'], created_at, updated_at)`.
    - `msg_links(ticket_id, engineer_msg_id, user_msg_id)` — связки веток переписки.
 3. **Фото:** хранятся через `file_id` Telegram + best-effort локальная копия в `./data/photos/ticket_<id>/` (ошибки не роняют заявку).
-4. **Конфигурация:** `BOT_TOKEN`, `GROUP_CHAT_ID`, `ADMIN_IDS` (ID через запятую), веб-админка `WEB_ENABLED`/`WEB_HOST`/`WEB_PORT`/`WEB_PASSWORD` из `.env` через `pydantic-settings`; опционально `DB_PATH`, `PHOTOS_DIR`, `MAX_PHOTOS`.
+4. **Конфигурация:** `BOT_TOKEN`, `GROUP_CHAT_ID`, `ADMIN_IDS` (ID через запятую) из `.env` через `pydantic-settings`; опционально `DB_PATH`, `PHOTOS_DIR`, `MAX_PHOTOS`.
 5. **Контейнеризация:**
    - `Dockerfile` (python slim).
    - `docker-compose.yml` с volume `./data:/app/data` (БД и фото переживают перезапуски).
@@ -95,8 +91,7 @@
 - `bot.py` (точка входа, инициализация, роутеры)
 - `config.py` (чтение .env)
 - `database/` (`__init__.py`, `db.py` — init/миграции, CRUD заявок, профилей, доступа, связок переписки)
-- `handlers/` (`user_handlers.py` — ЛС: регистрация, опросы, обращения, возвраты, ветки переписки; `engineer_handlers.py` — чат специалистов; `admin_handlers.py` — /admin; `fsm_states.py` — SupportForm/CartridgeForm/ProfileForm/RejectForm/AccessForm/AdminForm/WriteForm; `common.py` — карточки, даты `ДД.ММ.ГГГГ ЧЧ:ММ`, уведомления, фото)
-- `webadmin/` (`__init__.py`, `app.py` — веб-панель: вход по паролю, пользователи, заявки, смена статусов, дублирование в чат)
+- `handlers/` (`user_handlers.py` — ЛС: регистрация, опросы, обращения, возвраты, ветки переписки; `engineer_handlers.py` — чат специалистов; `admin_handlers.py` — /admin в одном сообщении; `fsm_states.py` — SupportForm/CartridgeForm/ProfileForm/RejectForm/AccessForm/AdminForm/WriteForm; `common.py` — карточки, даты `ДД.ММ.ГГГГ ЧЧ:ММ`, уведомления, фото)
 - `keyboards/` (`reply.py` — меню, отмена/пропуск/подтверждение/телефон; `inline.py` — управление заявкой, правки полей, каталог картриджей, доступ, админка)
 - `Dockerfile` и `docker-compose.yml`
 - `README.md`: как это работает, деплой на VPS за 3 шага, сборка Docker-образа вручную по шагам, выкладка на GitHub по шагам, админ-панель, схема БД.

@@ -2,6 +2,7 @@
 import logging
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -162,14 +163,53 @@ def _ticket_kb(ticket_id: int, owner_tg: int) -> InlineKeyboardMarkup:
     )
 
 
+async def _edit_menu(bot: Bot, chat_id: int, msg_id: int, text: str, kb=None) -> int | None:
+    """Править меню-сообщение. Вернёт msg_id или None, если править нечего/нельзя."""
+    try:
+        await bot.edit_message_text(text, chat_id=chat_id, message_id=msg_id, reply_markup=kb)
+        return msg_id
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            return msg_id
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _show_menu(bot: Bot, chat_id: int, state: FSMContext, text: str, kb=None) -> None:
+    """Показать меню в единственном сообщении: правим старое, иначе шлём новое."""
+    data = await state.get_data()
+    old_id = data.get("adm_menu")
+    new_id = None
+    if old_id:
+        new_id = await _edit_menu(bot, chat_id, old_id, text, kb)
+    if new_id is None:
+        sent = await bot.send_message(chat_id, text, reply_markup=kb)
+        new_id = sent.message_id
+    await state.update_data(adm_menu=new_id)
+
+
+async def _tidy(message: Message, bot: Bot) -> None:
+    """Удалить ввод пользователя, чтобы чат не засорялся."""
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @router.message(Command("admin"))
-async def admin_menu(message: Message, state: FSMContext) -> None:
+async def admin_menu(message: Message, state: FSMContext, bot: Bot) -> None:
     if not _is_admin(message.from_user.id):
         await message.answer("⛔ Нет доступа.")
         return
+    data = await state.get_data()
+    old_id = data.get("adm_menu")
     await state.clear()
+    if old_id:
+        await state.update_data(adm_menu=old_id)
     kb, header = await _users_kb(0)
-    await message.answer(header, reply_markup=kb)
+    await _show_menu(bot, message.chat.id, state, header, kb)
+    await _tidy(message, bot)  # убираем саму команду /admin
 
 
 @router.callback_query(F.data.startswith("adm:"))
@@ -187,13 +227,21 @@ async def adm_router(callback: CallbackQuery, state: FSMContext, bot: Bot) -> No
         try:
             await callback.message.edit_text(header, reply_markup=kb)
         except Exception:  # noqa: BLE001
-            await callback.message.answer(header, reply_markup=kb)
+            sent = await callback.message.answer(header, reply_markup=kb)
+            await state.update_data(adm_menu=sent.message_id)
+            await callback.answer()
+            return
+        await state.update_data(adm_menu=callback.message.message_id)
         await callback.answer()
         return
 
     if action == "search":
+        await state.update_data(adm_menu=callback.message.message_id)
         await state.set_state(AdminForm.waiting_search)
-        await callback.message.answer("🔍 Введите ФИО, телефон, поликлинику, адрес или ID:")
+        try:
+            await callback.message.edit_text("🔍 Введите ФИО, телефон, поликлинику, адрес или ID:")
+        except Exception:  # noqa: BLE001
+            pass
         await callback.answer()
         return
 
@@ -208,6 +256,7 @@ async def adm_router(callback: CallbackQuery, state: FSMContext, bot: Bot) -> No
         await callback.message.edit_text(
             ticket_card(t), reply_markup=_ticket_kb(t["id"], t["telegram_id"])
         )
+        await state.update_data(adm_menu=callback.message.message_id)
         await callback.answer()
         return
 
@@ -251,6 +300,7 @@ async def adm_router(callback: CallbackQuery, state: FSMContext, bot: Bot) -> No
     if action == "user":
         await state.clear()
         await callback.message.edit_text(_card(u), reply_markup=_detail_kb(u))
+        await state.update_data(adm_menu=callback.message.message_id)
         await callback.answer()
     elif action == "tickets":
         tickets = await get_user_tickets(tg)
@@ -280,6 +330,7 @@ async def adm_router(callback: CallbackQuery, state: FSMContext, bot: Bot) -> No
             f"📁 Обращения пользователя {_uname(u)} (всего {len(tickets)}):",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
+        await state.update_data(adm_menu=callback.message.message_id)
         await callback.answer()
     elif action in ("ffio", "faddr", "fclinic"):
         field = {"ffio": "fio", "faddr": "address", "fclinic": "clinic_short"}[action]
@@ -288,9 +339,14 @@ async def adm_router(callback: CallbackQuery, state: FSMContext, bot: Bot) -> No
             "address": "адрес поликлиники",
             "clinic_short": "номер поликлиники (сокращённо)",
         }[field]
-        await state.update_data(adm_target=tg, adm_field=field)
+        await state.update_data(
+            adm_target=tg, adm_field=field, adm_menu=callback.message.message_id
+        )
         await state.set_state(AdminForm.waiting_value)
-        await callback.message.answer(f"✏️ Введите новый <b>{label}</b> для {_uname(u)}:")
+        try:
+            await callback.message.edit_text(f"✏️ Введите новый <b>{label}</b> для {_uname(u)}:")
+        except Exception:  # noqa: BLE001
+            pass
         await callback.answer()
     elif action == "approve":
         if (u.get("access") or "pending").strip() != "pending":
@@ -305,9 +361,14 @@ async def adm_router(callback: CallbackQuery, state: FSMContext, bot: Bot) -> No
         if (u.get("access") or "pending").strip() != "pending":
             await callback.answer("Заявка уже рассмотрена", show_alert=True)
             return
-        await state.update_data(adm_target=tg, adm_field="deny")
+        await state.update_data(
+            adm_target=tg, adm_field="deny", adm_menu=callback.message.message_id
+        )
         await state.set_state(AdminForm.waiting_value)
-        await callback.message.answer(f"⛔ Укажите <b>причину отказа</b> для {_uname(u)}:")
+        try:
+            await callback.message.edit_text(f"⛔ Укажите <b>причину отказа</b> для {_uname(u)}:")
+        except Exception:  # noqa: BLE001
+            pass
         await callback.answer()
     elif action == "block":
         await set_access(tg, "denied", reason="Заблокировано администратором", by=f"admin:{callback.from_user.id}")
@@ -326,17 +387,24 @@ async def adm_router(callback: CallbackQuery, state: FSMContext, bot: Bot) -> No
 
 
 @router.message(AdminForm.waiting_search)
-async def adm_search(message: Message, state: FSMContext) -> None:
+async def adm_search(message: Message, state: FSMContext, bot: Bot) -> None:
     if not _is_admin(message.from_user.id):
         await state.clear()
         return
     query = (message.text or "").strip()
+    data = await state.get_data()
+    menu_id = data.get("adm_menu")
     if not query:
-        await message.answer("⚠️ Введите запрос текстом:")
+        if menu_id:
+            await _edit_menu(bot, message.chat.id, menu_id, "⚠️ Введите запрос текстом:")
+        await _tidy(message, bot)
         return
     await state.clear()
+    if menu_id:
+        await state.update_data(adm_menu=menu_id)
     kb, header = await _search_kb(query)
-    await message.answer(header, reply_markup=kb)
+    await _show_menu(bot, message.chat.id, state, header, kb)
+    await _tidy(message, bot)
 
 
 @router.message(AdminForm.waiting_value)
@@ -347,31 +415,47 @@ async def adm_save(message: Message, state: FSMContext, bot: Bot) -> None:
     data = await state.get_data()
     tg = data.get("adm_target")
     field = data.get("adm_field")
+    menu_id = data.get("adm_menu")
     value = (message.text or "").strip()
+
+    async def _prompt_again(text: str) -> None:
+        if menu_id:
+            await _edit_menu(bot, message.chat.id, menu_id, text)
+        await _tidy(message, bot)
+
     if not tg or field not in ("fio", "address", "clinic_short", "deny") or not value:
-        await message.answer("⚠️ Введите значение текстом:")
+        await _prompt_again("⚠️ Введите значение текстом:")
         return
     if field == "deny":
         await set_access(tg, "denied", reason=value, by=f"admin:{message.from_user.id}")
         await state.clear()
+        if menu_id:
+            await state.update_data(adm_menu=menu_id)
         ok = await notify_user(bot, tg, f"❌ В доступе отказано: {value}.")
         u = await get_user(tg)
         text = "⛔ Доступ отклонён" + ("" if ok else " (уведомить не удалось — бот заблокирован)")
         if u:
-            await message.answer(text + ":\n\n" + _card(u), reply_markup=_detail_kb(u))
+            text += ":\n\n" + _card(u)
+            kb = _detail_kb(u)
         else:
-            await message.answer(text + ".")
+            text += "."
+            kb = None
+        await _show_menu(bot, message.chat.id, state, text, kb)
+        await _tidy(message, bot)
         return
     if field == "fio" and not _valid_fio(value):
-        await message.answer("⚠️ Введите ФИО полностью (например, Иванов Иван Иванович):")
+        await _prompt_again("⚠️ Введите ФИО полностью (например, Иванов Иван Иванович):")
         return
     if field == "address" and len(value) < 3:
-        await message.answer("⚠️ Введите адрес поликлиники:")
+        await _prompt_again("⚠️ Введите адрес поликлиники:")
         return
     await update_profile(tg, **{field: value})
     await state.clear()
+    if menu_id:
+        await state.update_data(adm_menu=menu_id)
     u = await get_user(tg)
     if u:
-        await message.answer("✅ Сохранено:\n\n" + _card(u), reply_markup=_detail_kb(u))
+        await _show_menu(bot, message.chat.id, state, "✅ Сохранено:\n\n" + _card(u), _detail_kb(u))
     else:
-        await message.answer("✅ Сохранено.")
+        await _show_menu(bot, message.chat.id, state, "✅ Сохранено.", None)
+    await _tidy(message, bot)
