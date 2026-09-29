@@ -324,6 +324,53 @@ async def get_user_tickets(telegram_id: int, limit: int = 20) -> list[dict[str, 
     return [dict(r) async for r in cur]
 
 
+async def list_tickets(
+    status: str = "", query: str = "", limit: int = 50, offset: int = 0
+) -> list[dict[str, Any]]:
+    """Все заявки с фильтром по статусу и поиском (для веб-админки)."""
+    db = await get_db()
+    where: list[str] = []
+    args: list[Any] = []
+    if status:
+        where.append("status = ?")
+        args.append(status)
+    if query.strip():
+        q = f"%{query.strip()}%"
+        where.append(
+            "(CAST(id AS TEXT) LIKE ? OR clinic_num LIKE ? OR address LIKE ? "
+            "OR description LIKE ? OR author_name LIKE ? OR printer_model LIKE ?)"
+        )
+        args += [q] * 6
+    sql = "SELECT * FROM tickets"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
+    cur = await db.execute(sql, (*args, limit, offset))
+    return [dict(r) async for r in cur]
+
+
+async def count_tickets(status: str = "", query: str = "") -> int:
+    db = await get_db()
+    where: list[str] = []
+    args: list[Any] = []
+    if status:
+        where.append("status = ?")
+        args.append(status)
+    if query.strip():
+        q = f"%{query.strip()}%"
+        where.append(
+            "(CAST(id AS TEXT) LIKE ? OR clinic_num LIKE ? OR address LIKE ? "
+            "OR description LIKE ? OR author_name LIKE ? OR printer_model LIKE ?)"
+        )
+        args += [q] * 6
+    sql = "SELECT COUNT(*) AS c FROM tickets"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    cur = await db.execute(sql, args)
+    row = await cur.fetchone()
+    return int(row["c"])
+
+
 async def update_ticket_status(
     ticket_id: int,
     status: str,

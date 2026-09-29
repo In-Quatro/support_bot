@@ -7,9 +7,22 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from config import settings
-from database import count_users, get_all_users, get_user, search_users, set_access, update_profile
+from database import (
+    STATUS_LABELS,
+    TYPE_LABELS,
+    count_users,
+    get_all_users,
+    get_ticket,
+    get_user,
+    get_user_tickets,
+    search_users,
+    set_access,
+    set_engineer_msg_id,
+    update_profile,
+)
+from keyboards.inline import ticket_controls
 
-from .common import notify_user
+from .common import fmt_dt, notify_user, photos_of, ticket_card
 from .fsm_states import AdminForm
 from .user_handlers import _valid_fio
 
@@ -125,8 +138,26 @@ def _detail_kb(u: dict) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="✏️ ФИО", callback_data=f"adm:ffio:{tg}")],
             [InlineKeyboardButton(text="✏️ Адрес", callback_data=f"adm:faddr:{tg}")],
             [InlineKeyboardButton(text="✏️ Поликлиника", callback_data=f"adm:fclinic:{tg}")],
+            [InlineKeyboardButton(text="📁 Обращения", callback_data=f"adm:tickets:{tg}")],
             access_row,
             [InlineKeyboardButton(text="⬅️ К списку", callback_data="adm:users")],
+        ]
+    )
+
+
+def _ticket_back_kb(owner_tg: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ К пользователю", callback_data=f"adm:user:{owner_tg}")]
+        ]
+    )
+
+
+def _ticket_kb(ticket_id: int, owner_tg: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📨 Дублировать в чат", callback_data=f"adm:resend:{ticket_id}")],
+            [InlineKeyboardButton(text="⬅️ К пользователю", callback_data=f"adm:user:{owner_tg}")],
         ]
     )
 
@@ -166,6 +197,48 @@ async def adm_router(callback: CallbackQuery, state: FSMContext, bot: Bot) -> No
         await callback.answer()
         return
 
+    if action == "ticket":
+        if len(parts) < 3 or not parts[2].isdigit():
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        t = await get_ticket(int(parts[2]))
+        if not t:
+            await callback.answer("Заявка не найдена", show_alert=True)
+            return
+        await callback.message.edit_text(
+            ticket_card(t), reply_markup=_ticket_kb(t["id"], t["telegram_id"])
+        )
+        await callback.answer()
+        return
+
+    if action == "resend":
+        if len(parts) < 3 or not parts[2].isdigit():
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        t = await get_ticket(int(parts[2]))
+        if not t:
+            await callback.answer("Заявка не найдена", show_alert=True)
+            return
+        tid = t["id"]
+        try:
+            sent = await bot.send_message(
+                settings.GROUP_CHAT_ID,
+                ticket_card(t, header="🔁 <b>Дубликат заявки (отправлен администратором)</b>"),
+                reply_markup=ticket_controls(tid, t.get("status") or "new"),
+            )
+        except Exception as e:  # noqa: BLE001
+            log.error("Админ не смог продублировать заявку #%s: %s", tid, e)
+            await callback.answer("Не удалось отправить в чат", show_alert=True)
+            return
+        await set_engineer_msg_id(tid, sent.message_id)
+        for fid in photos_of(t):
+            try:
+                await bot.send_photo(settings.GROUP_CHAT_ID, fid, reply_to_message_id=sent.message_id)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Не удалось переслать фото дубликата #%s: %s", tid, e)
+        await callback.answer(f"Заявка #{tid} продублирована в чат ✅")
+        return
+
     if len(parts) < 3 or not parts[2].isdigit():
         await callback.answer("Некорректные данные", show_alert=True)
         return
@@ -178,6 +251,35 @@ async def adm_router(callback: CallbackQuery, state: FSMContext, bot: Bot) -> No
     if action == "user":
         await state.clear()
         await callback.message.edit_text(_card(u), reply_markup=_detail_kb(u))
+        await callback.answer()
+    elif action == "tickets":
+        tickets = await get_user_tickets(tg)
+        if not tickets:
+            await callback.message.edit_text(
+                f"📭 У пользователя {_uname(u)} обращений нет.",
+                reply_markup=_ticket_back_kb(tg),
+            )
+            await callback.answer()
+            return
+        rows = []
+        for t in tickets[:30]:
+            status = STATUS_LABELS.get(t.get("status", ""), t.get("status", ""))
+            ttype = TYPE_LABELS.get(t.get("type", ""), t.get("type", ""))
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"#{t['id']} • {ttype} • {status} • {fmt_dt(t.get('created_at'))}",
+                        callback_data=f"adm:ticket:{t['id']}",
+                    )
+                ]
+            )
+        rows.append(
+            [InlineKeyboardButton(text="⬅️ К пользователю", callback_data=f"adm:user:{tg}")]
+        )
+        await callback.message.edit_text(
+            f"📁 Обращения пользователя {_uname(u)} (всего {len(tickets)}):",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
         await callback.answer()
     elif action in ("ffio", "faddr", "fclinic"):
         field = {"ffio": "fio", "faddr": "address", "fclinic": "clinic_short"}[action]
