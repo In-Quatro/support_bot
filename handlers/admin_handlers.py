@@ -111,17 +111,21 @@ async def _search_kb(query: str) -> tuple[InlineKeyboardMarkup, str]:
 def _detail_kb(u: dict) -> InlineKeyboardMarkup:
     tg = u["telegram_id"]
     access = (u.get("access") or "pending").strip() or "pending"
-    toggle = (
-        InlineKeyboardButton(text="🚫 Закрыть доступ", callback_data=f"adm:block:{tg}")
-        if access != "denied"
-        else InlineKeyboardButton(text="✅ Открыть доступ", callback_data=f"adm:unblock:{tg}")
-    )
+    if access == "pending":
+        access_row = [
+            InlineKeyboardButton(text="✅ Одобрить", callback_data=f"adm:approve:{tg}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"adm:deny:{tg}"),
+        ]
+    elif access == "denied":
+        access_row = [InlineKeyboardButton(text="✅ Открыть доступ", callback_data=f"adm:unblock:{tg}")]
+    else:
+        access_row = [InlineKeyboardButton(text="🚫 Закрыть доступ", callback_data=f"adm:block:{tg}")]
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✏️ ФИО", callback_data=f"adm:ffio:{tg}")],
             [InlineKeyboardButton(text="✏️ Адрес", callback_data=f"adm:faddr:{tg}")],
             [InlineKeyboardButton(text="✏️ Поликлиника", callback_data=f"adm:fclinic:{tg}")],
-            [toggle],
+            access_row,
             [InlineKeyboardButton(text="⬅️ К списку", callback_data="adm:users")],
         ]
     )
@@ -186,6 +190,23 @@ async def adm_router(callback: CallbackQuery, state: FSMContext, bot: Bot) -> No
         await state.set_state(AdminForm.waiting_value)
         await callback.message.answer(f"✏️ Введите новый <b>{label}</b> для {_uname(u)}:")
         await callback.answer()
+    elif action == "approve":
+        if (u.get("access") or "pending").strip() != "pending":
+            await callback.answer("Заявка уже рассмотрена", show_alert=True)
+            return
+        await set_access(tg, "approved", by=f"admin:{callback.from_user.id}")
+        ok = await notify_user(bot, tg, "✅ <b>Доступ одобрен!</b> Теперь можно пользоваться ботом — нажмите /start.")
+        u = await get_user(tg)
+        await callback.message.edit_text(_card(u) + ("\n⚠️ Уведомить не удалось (бот заблокирован)." if not ok else ""), reply_markup=_detail_kb(u))
+        await callback.answer("Доступ одобрен ✅")
+    elif action == "deny":
+        if (u.get("access") or "pending").strip() != "pending":
+            await callback.answer("Заявка уже рассмотрена", show_alert=True)
+            return
+        await state.update_data(adm_target=tg, adm_field="deny")
+        await state.set_state(AdminForm.waiting_value)
+        await callback.message.answer(f"⛔ Укажите <b>причину отказа</b> для {_uname(u)}:")
+        await callback.answer()
     elif action == "block":
         await set_access(tg, "denied", reason="Заблокировано администратором", by=f"admin:{callback.from_user.id}")
         ok = await notify_user(bot, tg, "❌ Доступ к боту закрыт администратором.")
@@ -217,7 +238,7 @@ async def adm_search(message: Message, state: FSMContext) -> None:
 
 
 @router.message(AdminForm.waiting_value)
-async def adm_save(message: Message, state: FSMContext) -> None:
+async def adm_save(message: Message, state: FSMContext, bot: Bot) -> None:
     if not _is_admin(message.from_user.id):
         await state.clear()
         return
@@ -225,8 +246,19 @@ async def adm_save(message: Message, state: FSMContext) -> None:
     tg = data.get("adm_target")
     field = data.get("adm_field")
     value = (message.text or "").strip()
-    if not tg or field not in ("fio", "address", "clinic_short") or not value:
+    if not tg or field not in ("fio", "address", "clinic_short", "deny") or not value:
         await message.answer("⚠️ Введите значение текстом:")
+        return
+    if field == "deny":
+        await set_access(tg, "denied", reason=value, by=f"admin:{message.from_user.id}")
+        await state.clear()
+        ok = await notify_user(bot, tg, f"❌ В доступе отказано: {value}.")
+        u = await get_user(tg)
+        text = "⛔ Доступ отклонён" + ("" if ok else " (уведомить не удалось — бот заблокирован)")
+        if u:
+            await message.answer(text + ":\n\n" + _card(u), reply_markup=_detail_kb(u))
+        else:
+            await message.answer(text + ".")
         return
     if field == "fio" and not _valid_fio(value):
         await message.answer("⚠️ Введите ФИО полностью (например, Иванов Иван Иванович):")
